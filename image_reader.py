@@ -79,7 +79,13 @@ def read_images_from_disk(input_queue, input_size, random_scale, random_mirror, 
         if random_mirror:
             image, mask = image_mirroring(image, mask)
 
-        image, mask = random_crop_and_pad(image, mask, height, width, ignore_label)
+        # cancel crop,
+        # image, mask = random_crop_and_pad(image, mask, height, width, ignore_label)
+        new_shape = tf.stack([height, width])
+        image = tf.image.resize_images(image, new_shape)
+        mask = tf.image.resize_nearest_neighbor(tf.expand_dims(mask, 0),
+                                                new_shape)
+        mask = tf.squeeze(mask, squeeze_dims=[0])
 
     return image, mask
 

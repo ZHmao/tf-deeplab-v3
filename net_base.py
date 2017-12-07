@@ -4,8 +4,8 @@ from tensorflow.contrib.learn import ModeKeys
 
 
 class BaseModel(object):
-    def __init__(self, mode):
-        self.training = ModeKeys.TRAIN == mode
+    def __init__(self, is_training):
+        self.training = is_training
         self.weights = []
         self.biases = []
 

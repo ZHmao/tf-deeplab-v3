@@ -44,11 +44,11 @@ def prepare_labels(input_batch, new_size, num_classes, one_hot=True):
 
 def inv_preprocess(images, num_images, image_mean):
     # Inverse preprocessing of the batch of images
-    # Add the mean vector and convert from BGR to RGB
+    # Add the mean vector
     batch_size, height, width, channels = images.shape
     assert(batch_size >= num_images),\
         'Batch size %d should be greater or equal than number of images to save %d' % (batch_size, num_images)
     outputs = np.zeros((num_images, height, width, channels), dtype=np.uint8)
     for i in range(num_images):
-        outputs[i] = (images[i] + image_mean)[:, :, ::-1].astype(np.uint8)
+        outputs[i] = (images[i] + image_mean).astype(np.uint8)
     return outputs

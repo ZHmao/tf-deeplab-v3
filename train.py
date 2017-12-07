@@ -1,102 +1,65 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
 from __future__ import division
 
-import argparse
 import os
 import time
+import random
 
 import tensorflow as tf
-
+import cv2
 
 from net_help import load_model, save_model, variable_summaries
 from net_small import DeepLabResNetModel
-from image_reader import ImageReader
 from utils import decode_labels, prepare_labels, inv_preprocess
 from defaults import *
 
 
-def get_arguments():
-    parser = argparse.ArgumentParser(description='DeepLab-ResNet Network')
-    parser.add_argument('--batch-size', type=int, default=BATCH_SIZE,
-                        help='Number of images per batch')
-    parser.add_argument('--index-loc', type=str, default=INDEX_FILE,
-                        help='Path to the file containing the matching files')
-    parser.add_argument('--data-dir', type=str, default=DATA_DIRECTORY,
-                        help='Path to the directory containing the training data')
-    parser.add_argument('--mask-dir', type=str, default=MASK_DIRECTORY,
-                        help='Path to the directory containing the masks of training data')
-    parser.add_argument('--ignore-label', type=str, default=IGNORE_LABEL,
-                        help='The index of the label to ignore during training')
-    parser.add_argument('--input-size', type=str, default=INPUT_SIZE,
-                        help='Comma-separated string with height and width of images')
-    parser.add_argument('--is-training', action='store_true',
-                        help='Whether to update the running means and variances during training')
-    parser.add_argument('--learning-rate', type=float, default=LEARNING_RATE,
-                        help='Base learning rate for training with polynomial decay')
-    parser.add_argument('--momentum', type=float, default=MOMENTUM,
-                        help='Momentum component of the optimizer')
-    parser.add_argument('--not-restore-last', action='store_true',
-                        help='Whether to not restore last FC layers')
-    parser.add_argument('--num-classes', type=int, default=NUM_CLASSES,
-                        help='Number of classes to predict, including background')
-    parser.add_argument('--num-steps', type=int, default=NUM_STEPS,
-                        help='Number of training steps')
-    parser.add_argument('--power', type=float, default=POWER,
-                        help='Decay parameter to compute the learning rate')
-    parser.add_argument('--random-mirror', action='store_true',
-                        help='Whether to randomly mirror the inputs during the training')
-    parser.add_argument('--random-scale', action='store_true',
-                        help='Whether to randomly scale the inputs during the training')
-    parser.add_argument('--random-seed', type=int, default=RANDOM_SEED,
-                        help='Random seed to have reproducible results')
-    parser.add_argument('--save-num-images', type=int, default=SAVE_NUM_IMAGES,
-                        help='Number of images to save')
-    parser.add_argument('--save-pred-every', type=int, default=SAVE_PRED_EVERY,
-                        help='When to save summaries and checkpoints')
-    parser.add_argument('--model-name', type=str, default=MODEL_DIR,
-                        help='Where to save the model checkpoints')
-    parser.add_argument('--snapshot-dir', type=str, default=SNAPSHOT_DIR,
-                        help='Where to save snapshots of the model')
-    parser.add_argument('--weight-decay', type=float, default=WEIGHT_DECAY,
-                        help='Regularization parameter for L2-loss')
-    parser.add_argument('--atrous-blocks', type=int, default=ATROUS_BLOCKS,
-                        help='Number of continuous atrous blocks to link')
-    return parser.parse_args()
+def read_data():
+    h, w = INPUT_SIZE
+    train_dir = TRAIN_DATA_DIR
+    val_dir = VAL_DATA_DIR
+    results = []
+    for tmp_dir in [train_dir, val_dir]:
+        img_dir = os.path.join(tmp_dir, 'images')
+        mask_dir = os.path.join(tmp_dir, 'labels_tf')
+
+        tmp_data = []
+        for file_name in os.listdir(img_dir):
+            p_fn = file_name[:-4]
+            img = cv2.imread(os.path.join(img_dir, file_name))
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            img = cv2.resize(img, (w, h), interpolation=cv2.INTER_CUBIC)
+            img  = img.astype('float32') - IMG_MEAN
+
+            mask = cv2.imread(os.path.join(mask_dir, p_fn+'.png'),
+                              cv2.IMREAD_GRAYSCALE)
+            mask = cv2.resize(mask, (w, h), interpolation=cv2.INTER_CUBIC)
+            mask = np.expand_dims(mask, axis=2)
+            tmp_data.append((img, mask))
+        results.append(tmp_data)
+
+    train_data = results[0]
+    val_data = results[1]
+    return (train_data, val_data)
+
 
 
 def main():
     # Create model and start training
-    args = get_arguments()
+    h, w = INPUT_SIZE
 
-    h, w = map(int, args.input_size.split(','))
-    input_size = (h, w)
+    X = tf.placeholder(tf.float32, shape=[None, h, w, 3], name='X')
+    Y = tf.placeholder(tf.uint8, shape=[None, h, w, 1], name='Y')
+    is_training = tf.placeholder(tf.bool, name='is_training')
 
-    tf.set_random_seed(args.random_seed)
-
-    # Create queue coordinator
-    coord = tf.train.Coordinator()
-
-    # Load Image Reader
-    with tf.name_scope('create_inputs'):
-        reader = ImageReader(
-            args.index_loc,
-            args.data_dir,
-            args.mask_dir,
-            input_size,
-            args.random_scale,
-            args.random_mirror,
-            args.ignore_label,
-            IMG_MEAN,
-            coord)
-
-        image_batch, label_batch = reader.dequeue(args.batch_size)
-
-    mode = tf.contrib.learn.ModeKeys.TRAIN
-    net = DeepLabResNetModel(image_batch, mode, args.num_classes, args.atrous_blocks)
+    net = DeepLabResNetModel(X, is_training, NUM_CLASSES, ATROUS_BLOCKS)
 
     raw_output = net.output
 
     # Trainable Variables
-    restore_vars = [v for v in tf.global_variables() if 'fc' not in v.name or not args.not_restore_last]
+    # restore_vars = [v for v in tf.global_variables() if 'fc' not in v.name or not args.not_restore_last]
     all_trainable = [v for v in tf.trainable_variables() if 'beta' not in v.name and 'gamma' not in v.name]
     fc_trainable = [v for v in all_trainable if 'fc' in v.name]
     conv_trainable = [v for v in all_trainable if 'fc' not in v.name]
@@ -104,34 +67,35 @@ def main():
     fc_b_trainable = [v for v in fc_trainable if 'biases' in v.name]
 
     # Predictions: ignoring all predictions with labels greater or equal than n_classes
-    raw_prediction = tf.reshape(raw_output, [-1, args.num_classes])
-    label_proc = prepare_labels(label_batch, tf.stack(raw_output.get_shape()[1:3]), num_classes=args.num_classes, one_hot=False)
+    raw_prediction = tf.reshape(raw_output, [-1, NUM_CLASSES])
+    label_proc = prepare_labels(Y, tf.stack(raw_output.get_shape()[1:3]), num_classes=NUM_CLASSES, one_hot=False)
     raw_gt = tf.reshape(label_proc, [-1,])
-    indices = tf.squeeze(tf.where(tf.less_equal(raw_gt, args.num_classes - 1)), 1)
+    indices = tf.squeeze(tf.where(tf.less_equal(raw_gt, NUM_CLASSES - 1)), 1)
     gt = tf.cast(tf.gather(raw_gt, indices), tf.int32)
     prediction = tf.gather(raw_prediction, indices)
 
     # Pixel-wise Softmax Loss
     loss = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=prediction, labels=gt)
-    l2_losses = [args.weight_decay * tf.nn.l2_loss(v) for v in tf.trainable_variables() if 'weights' in v.name]
+    l2_losses = [WEIGHT_DECAY * tf.nn.l2_loss(v) for v in tf.trainable_variables() if 'weights' in v.name]
     reduced_loss = tf.reduce_mean(loss) + tf.add_n(l2_losses)
     variable_summaries(reduced_loss, name='loss')
+    variable_summaries(loss, name='loss_origin')
 
     # Processed predictions: for visualization
-    raw_output_up = tf.image.resize_bilinear(raw_output, tf.shape(image_batch)[1:3,])
+    raw_output_up = tf.image.resize_bilinear(raw_output, tf.shape(X)[1:3,])
     raw_output_up = tf.argmax(raw_output_up, dimension=3)
     pred = tf.expand_dims(raw_output_up, dim=3)
 
     # Define loss and optimization parameters
-    base_lr = tf.constant(args.learning_rate, tf.float64)
+    base_lr = tf.constant(LEARNING_RATE, tf.float64)
     global_step = tf.Variable(0, trainable=False, name='global_step')
     increment_step = tf.assign(global_step, global_step + 1)
-    learning_rate = tf.scalar_mul(base_lr, tf.pow((1 - global_step / args.num_steps), args.power))
+    learning_rate = tf.scalar_mul(base_lr, tf.pow((1 - global_step / NUM_STEPS), POWER))
     learning_rate = tf.maximum(learning_rate, 8e-7)
 
-    opt_conv = tf.train.MomentumOptimizer(learning_rate, args.momentum)
-    opt_fc_w = tf.train.MomentumOptimizer(learning_rate * 5.0, args.momentum)
-    opt_fc_b = tf.train.MomentumOptimizer(learning_rate * 10.0, args.momentum)
+    opt_conv = tf.train.MomentumOptimizer(learning_rate, MOMENTUM)
+    opt_fc_w = tf.train.MomentumOptimizer(learning_rate * 5.0, MOMENTUM)
+    opt_fc_b = tf.train.MomentumOptimizer(learning_rate * 10.0, MOMENTUM)
 
     grads = tf.gradients(reduced_loss, conv_trainable + fc_w_trainable + fc_b_trainable)
     grads_conv = grads[:len(conv_trainable)]
@@ -142,23 +106,23 @@ def main():
     train_op_fc_w = opt_fc_w.apply_gradients(zip(grads_fc_w, fc_w_trainable))
     train_op_fc_b = opt_fc_b.apply_gradients(zip(grads_fc_b, fc_b_trainable))
 
-    train_op = tf.group(increment_step, train_op_conv, train_op_fc_w, train_op_fc_b)
+    update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+    with tf.control_dependencies(update_ops):
+        train_op = tf.group(increment_step, train_op_conv, train_op_fc_w, train_op_fc_b)
 
     # initial_learning_rate = 1e-2
     # learning_rate = tf.train.exponential_decay(initial_learning_rate, global_step, 300, 0.96)
     # adam = tf.train.AdamOptimizer(learning_rate).minimize(reduced_loss, global_step=global_step)
 
     # Image Summary
-    model_dir = args.snapshot_dir + args.model_name
-
-    images_summary = tf.py_func(inv_preprocess, [image_batch, args.save_num_images, IMG_MEAN], tf.uint8)
-    preds_summary = tf.py_func(decode_labels, [pred, args.save_num_images, args.num_classes], tf.uint8)
-    labels_summary = tf.py_func(decode_labels, [label_batch, args.save_num_images, args.num_classes], tf.uint8)
+    images_summary = tf.py_func(inv_preprocess, [X, SAVE_NUM_IMAGES, IMG_MEAN], tf.uint8)
+    preds_summary = tf.py_func(decode_labels, [pred, SAVE_NUM_IMAGES, NUM_CLASSES], tf.uint8)
+    labels_summary = tf.py_func(decode_labels, [Y, SAVE_NUM_IMAGES, NUM_CLASSES], tf.uint8)
 
     image_summaries = [images_summary, preds_summary, labels_summary]
     image_summary = tf.summary.image('images',
                                      tf.concat(axis=2, values=image_summaries),
-                                     max_outputs=args.save_num_images)
+                                     max_outputs=SAVE_NUM_IMAGES)
 
     # Variable Summary
     variable_summaries(fc_w_trainable, 'fc_w')
@@ -168,31 +132,62 @@ def main():
     # variable_summaries(net.biases, 'aconv_b')
 
     total_summary = tf.summary.merge_all()
-    summary_writer = tf.summary.FileWriter(model_dir, graph=tf.get_default_graph())
 
+    tb_train_dir = os.path.join(SNAPSHOT_DIR, 'train')
+    tb_val_dir = os.path.join(SNAPSHOT_DIR, 'verify')
+    summary_writer = tf.summary.FileWriter(tb_train_dir,
+                                           graph=tf.get_default_graph())
+    verify_writer = tf.summary.FileWriter(tb_val_dir)
+
+    train_data, val_data = read_data()
+    train_data_count = len(train_data)
+    batch_size = BATCH_SIZE
+
+    print('batch size: %s, total step: %s, train data num: %s' %
+          (batch_size, NUM_STEPS, train_data_count))
     # Set up session
-
     with tf.Session() as sess:
         tf.global_variables_initializer().run()
         saver = tf.train.Saver(max_to_keep=3)
-        if args.snapshot_dir is not None and args.model_name is not None and os.path.exists(model_dir):
+        if SNAPSHOT_DIR is not None and os.path.exists(SNAPSHOT_DIR):
             loader = tf.train.Saver()
-            load_model(loader, sess, model_dir)
+            load_model(loader, sess, SNAPSHOT_DIR)
 
-        threads = tf.train.start_queue_runners(coord=coord, sess=sess)
-        # train_op = adam
+        # export pb
+        if False:
+            import export_pb
+            export_pb.save_graph_with_weight(sess, ['ExpandDims'],
+                                             '/data/pb/traffic_line_deeplab_resnet_cut05_271_loss_0_0_93.pb')
 
-        for step in range(args.num_steps):
+        start_index = 0
+        for step in range(NUM_STEPS):
+            # start_time = time.time()
+
+            if start_index + batch_size > train_data_count:
+                start_index = 0
+                random.shuffle(train_data)
+            _train_data = train_data[start_index: start_index + batch_size]
+            start_index += batch_size
+            after_processing_data = []
             start_time = time.time()
-
-            if step % args.save_pred_every == 0:
-                feed = [reduced_loss, image_batch, label_batch, pred, total_summary, global_step, train_op]
-                loss_value, images, labels, preds, summary, total_steps, _ = sess.run(feed)
+            for x_img, y_data in _train_data:
+                # tmp_img = augmentation(x_img)
+                # x_data = np.asarray(tmp_img).astype('float32') / 255.0
+                after_processing_data.append((x_img, y_data))
+            vec = [d[0] for d in after_processing_data]
+            vec2 = [d[1] for d in after_processing_data]
+            # data_process_time = time.time() - start_time
+            if step % SAVE_SUMMARY_EVERY == 0:
+                feed = [reduced_loss, pred,
+                        total_summary, global_step, train_op]
+                loss_value, preds, summary, total_steps, _ = \
+                    sess.run(feed, feed_dict={X: vec, Y: vec2, is_training: True})
                 summary_writer.add_summary(summary, total_steps)
-                save_model(saver, sess, model_dir, global_step)
             else:
                 feed = [reduced_loss, global_step, train_op]
-                loss_value, total_steps, _ = sess.run(feed)
+                loss_value, total_steps, _ = sess.run(feed, feed_dict={X: vec, Y: vec2, is_training: True})
+            if step % SAVE_MODEL_EVERY == 0:
+                save_model(saver, sess, SNAPSHOT_DIR, global_step)
 
             duration = time.time() - start_time
             results = 'global step: {:d}, step: {:d} \t loss = {:.3f}, ({:.3f} secs)'\
@@ -202,8 +197,16 @@ def main():
                     f.write(results + '\n')
             print(results)
 
-        coord.request_stop()
-        coord.join(threads)
+            if step % VAL_EVERY == 0:
+                random.shuffle(val_data)
+                vec = [d[0] for d in val_data[:batch_size]]
+                vec2 = [d[1] for d in val_data[:batch_size]]
+                feed = [reduced_loss, pred,
+                        total_summary, global_step]
+                loss_value, preds, summary, total_steps = \
+                    sess.run(feed, feed_dict={X: vec, Y: vec2, is_training: False})
+                verify_writer.add_summary(summary, total_steps)
+                print('[Verify]', step, loss_value)
 
 
 if __name__ == '__main__':
