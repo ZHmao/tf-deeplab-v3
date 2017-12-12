@@ -23,7 +23,7 @@ def read_data():
     results = []
     for tmp_dir in [train_dir, val_dir]:
         img_dir = os.path.join(tmp_dir, 'images')
-        mask_dir = os.path.join(tmp_dir, 'labels_tf')
+        mask_dir = os.path.join(tmp_dir, 'labels')
 
         tmp_data = []
         for file_name in os.listdir(img_dir):
@@ -36,6 +36,7 @@ def read_data():
             mask = cv2.imread(os.path.join(mask_dir, p_fn+'.png'),
                               cv2.IMREAD_GRAYSCALE)
             mask = cv2.resize(mask, (w, h), interpolation=cv2.INTER_CUBIC)
+            mask = np.divide(mask, 255)
             mask = np.expand_dims(mask, axis=2)
             tmp_data.append((img, mask))
         results.append(tmp_data)
@@ -143,21 +144,20 @@ def main():
     train_data_count = len(train_data)
     batch_size = BATCH_SIZE
 
-    print('batch size: %s, total step: %s, train data num: %s' %
+    print('\n batch size: %s, total step: %s, train data num: %s \n' %
           (batch_size, NUM_STEPS, train_data_count))
     # Set up session
     with tf.Session() as sess:
         tf.global_variables_initializer().run()
+        # save_var = tf.trainable_variables()
+        # bn_moving_vars = [v for v in tf.global_variables() \
+        #                   if
+        #                   '/moving_mean' in v.name or '/moving_variance' in v.name]
+        # save_var += bn_moving_vars
         saver = tf.train.Saver(max_to_keep=3)
         if SNAPSHOT_DIR is not None and os.path.exists(SNAPSHOT_DIR):
             loader = tf.train.Saver()
             load_model(loader, sess, SNAPSHOT_DIR)
-
-        # export pb
-        if False:
-            import export_pb
-            export_pb.save_graph_with_weight(sess, ['ExpandDims'],
-                                             '/data/pb/traffic_line_deeplab_resnet_cut05_271_loss_0_0_93.pb')
 
         start_index = 0
         for step in range(NUM_STEPS):
